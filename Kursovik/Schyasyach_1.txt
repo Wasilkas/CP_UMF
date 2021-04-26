@@ -1,0 +1,365 @@
+
+// LU Факторизация
+void CalcLU(CRSMatrix& matrix) {
+	double sumU, sumL, sumD;
+	int n = matrix.n;
+
+
+	for (int i = 0; i < n; i++) {
+
+		sumD = 0;
+
+		int begI = matrix.ig[i];
+		int endI = matrix.ig[i + 1];
+		for (int igi = begI; igi < endI; igi++) {
+
+			sumU = 0;
+			sumL = 0;
+
+			int Jindex = matrix.jg[igi];
+
+			for (int igj = begI; igj < igi; igj++) {
+
+				int begJ = matrix.ig[Jindex];
+				int endJ = matrix.ig[Jindex + 1];
+
+				for (int jgi = begJ; jgi < endJ; jgi++) {
+
+					if (matrix.jg[igj] == matrix.jg[jgi]) {
+
+						sumL += matrix.l[igj] * matrix.u[jgi];
+
+						sumU += matrix.l[jgi] * matrix.u[igj];
+
+					}
+
+				}
+			}
+			matrix.l[igi] -= sumL;
+			matrix.u[igi] -= sumU;
+			matrix.u[igi] /= matrix.d[Jindex];
+			sumD += matrix.l[igi] * matrix.u[igi];
+		}
+
+		matrix.d[i] -= sumD;
+	}
+}
+
+// Прямой ход Ly = F
+void CalcDir(CRSMatrix& matrix, vector<double>& y, vector<double>& F) {
+	double sum, buf;
+	int n = matrix.n;
+
+
+	for (int i = 0; i < n; i++) {
+		y[i] = F[i];
+	}
+
+	for (int i = 0; i < n; i++) {
+
+		sum = 0;
+
+		int begI = matrix.ig[i];
+		int endI = matrix.ig[i + 1];
+
+		for (int igi = begI; igi < endI; igi++) {
+
+			sum += y[matrix.jg[igi]] * matrix.l[igi];
+
+		}
+
+		buf = y[i] - sum;
+
+		y[i] = buf / matrix.d[i];
+
+	}
+
+}
+
+// Обратный ход Ux = y
+void CalcRev(CRSMatrix& matrix, vector<double>& x, vector<double>& y) {
+	int n = matrix.n;
+
+	for (int i = 0; i < n; i++) {
+		x[i] = y[i];
+	}
+
+	for (int i = matrix.n - 1; i >= 0; i--) {
+
+		int begI = matrix.ig[i];
+		int endI = matrix.ig[i + 1];
+
+		for (int igi = begI; igi < endI; igi++) {
+
+			x[matrix.jg[igi]] -= x[i] * matrix.u[igi];
+
+		}
+
+	}
+
+}
+
+// Умножение матрицы на вектор Ax = res
+void MultMV(CRSMatrix& matrix, vector<double>& x, vector<double>& res) {
+	int n = matrix.n;
+
+	for (int i = 0; i < n; i++) {
+
+		res[i] = matrix.di[i] * x[i];
+
+		int begI = matrix.ig[i];
+		int endI = matrix.ig[i + 1];
+
+		for (int igi = begI; igi < endI; igi++) {
+
+			int Jindex = matrix.jg[igi];
+
+			res[i] += matrix.ggl[igi] * x[Jindex];
+			res[Jindex] += matrix.ggu[igi] * x[i];
+
+		}
+	}
+}
+
+// Скалярное произведение двух векторов
+double ScalarProd(vector<double>& x, vector<double>& y) {
+	int n = x.size();
+
+	double result = 0;
+
+	for (int i = 0; i < n; i++) {
+		result += x[i] * y[i];
+	}
+
+	return result;
+}
+
+// Локально-оптимальная схема c факторизацией LU
+void LOS_LU(CRSMatrix& matrix) {
+
+	double alpha, beta, norm, temp_nev = 0;
+
+	int n = matrix.n, maxiter = matrix.maxiter;
+	double epsilon = matrix.epsilon;
+
+	CalcLU(matrix);
+	// A * x0
+	MultMV(matrix, matrix.x, matrix.temp);
+
+	// f - A * x0
+	for (int i = 0; i < n; i++) {
+		matrix.temp[i] = matrix.F[i] - matrix.temp[i];
+	}
+
+	// L * r0 = f - A * x0
+	CalcDir(matrix, matrix.r, matrix.temp);
+
+	// U * z0 = r0
+	CalcRev(matrix, matrix.z, matrix.r);
+
+	// A * z0
+	MultMV(matrix, matrix.z, matrix.temp);
+
+	// L * p0 = A * z0
+	CalcDir(matrix, matrix.p, matrix.temp);
+
+	norm = ScalarProd(matrix.r, matrix.r);
+
+	int k;
+
+	for (k = 0; k < maxiter && norm > epsilon && norm != temp_nev; k++) {
+
+		// если невязка не изменилась, то выходим из итерационного процесса
+		temp_nev = norm;
+
+		alpha = ScalarProd(matrix.p, matrix.r) / ScalarProd(matrix.p, matrix.p);
+
+		for (int i = 0; i < n; i++) {
+
+			matrix.x[i] = matrix.x[i] + alpha * matrix.z[i];
+			matrix.r[i] = matrix.r[i] - alpha * matrix.p[i];
+
+		}
+
+		// U * temp = r
+		CalcRev(matrix, matrix.temp, matrix.r);
+
+		// A * U-1 * r = temp0
+		MultMV(matrix, matrix.temp, matrix.temp0);
+
+		// L * temp = A * U-1 * r 
+		CalcDir(matrix, matrix.temp, matrix.temp0);
+
+		beta = -1 * ScalarProd(matrix.p, matrix.temp) / ScalarProd(matrix.p, matrix.p);
+
+		// U * temp0 = r
+		CalcRev(matrix, matrix.temp0, matrix.r);
+
+		norm = norm - alpha * alpha * ScalarProd(matrix.p, matrix.p);
+
+		for (int i = 0; i < n; i++) {
+
+			matrix.z[i] = matrix.temp0[i] + beta * matrix.z[i];
+			matrix.p[i] = matrix.temp[i] + beta * matrix.p[i];
+
+		}
+
+	}
+
+}
+
+void Portrait(Grid& grid, CRSMatrix& crsMatrix) {
+
+	int elemAmount = grid.finitElements.size();
+	int funcAmount = grid.nodes.size();
+
+	crsMatrix.d.resize(funcAmount);
+	crsMatrix.r.resize(funcAmount);
+	crsMatrix.F.resize(funcAmount);
+	crsMatrix.z.resize(funcAmount);
+	crsMatrix.x.resize(funcAmount);
+	crsMatrix.p.resize(funcAmount);
+	crsMatrix.di.resize(funcAmount);
+	crsMatrix.temp.resize(funcAmount);
+	crsMatrix.temp0.resize(funcAmount);
+	crsMatrix.n = funcAmount;
+	crsMatrix.maxiter = 1E9;
+	crsMatrix.epsilon = 1E-15;
+
+	vector<int> listbeg;
+	vector<int> list1;
+	vector<int> list2;
+
+	listbeg.resize(funcAmount);
+	list1.resize(8 * funcAmount);
+	list2.resize(8 * funcAmount);
+	int listsize = -1;
+	int iaddr;
+
+	for (int ielem = 0; ielem < elemAmount; ielem++) {
+		for (int i = 0; i < 3; i++) {
+			int k = grid.finitElements[ielem].nodes[i].globalNumber;
+
+			for (int j = i + 1; j < 3; j++) {
+				int ind1 = k;
+				int ind2 = grid.finitElements[ielem].nodes[j].globalNumber;
+
+				if (ind2 < ind1) {
+					ind1 = ind2;
+					ind2 = k;
+				}
+
+				iaddr = listbeg[ind2];
+
+				if (iaddr == 0) {
+					listsize++;
+					listbeg[ind2] = listsize;
+					list1[listsize] = ind1;
+					list2[listsize] = 0;
+				}
+				else {
+					while (list1[iaddr] < ind1 && list2[iaddr] > 0) {
+						iaddr = list2[iaddr];
+					}
+
+					if (list1[iaddr] > ind1) {
+						listsize++;
+						list1[listsize] = list1[iaddr];
+						list2[listsize] = list2[iaddr];
+						list1[iaddr] = ind1;
+						list2[iaddr] = listsize;
+					}
+					else {
+						if (list1[iaddr] < ind1) {
+							listsize++;
+							list2[iaddr] = listsize;
+							list1[listsize] = ind1;
+							list2[listsize] = 0;
+						}
+					}
+				}
+
+			}
+
+		}
+	}
+
+	crsMatrix.ig.resize(funcAmount + 1);
+
+	crsMatrix.ggl.resize(list1.size());
+	crsMatrix.ggu.resize(list1.size());
+	crsMatrix.u.resize(list1.size());
+	crsMatrix.l.resize(list1.size());
+	crsMatrix.jg.resize(list1.size());
+
+	crsMatrix.ig[0] = 0;
+
+	for (int i = 0; i < funcAmount; i++) {
+		crsMatrix.ig[i + 1] = crsMatrix.ig[i];
+
+		iaddr = listbeg[i];
+
+		while (iaddr != 0) {
+			crsMatrix.jg[crsMatrix.ig[i + 1] + 1] = list1[iaddr];
+			crsMatrix.ig[i + 1]++;
+			iaddr = list2[iaddr];
+		}
+
+	}
+
+	for (int i = 2; i < funcAmount + 1; i++) {
+		crsMatrix.ig[i]++;
+	}
+
+}
+
+void GlobalMatrix(Grid& grid, CRSMatrix& crsMatrix, DenseMatrix& denseMatrix, TimeLayer& timeLayer) {
+
+	int temp;
+
+	for (int i = 0; i < grid.finitElements.size(); i++) {
+
+		LocalMatrix(grid.finitElements[i], denseMatrix, timeLayer);
+
+		for (int k = 0; k < 3; k++) {
+
+			int begI = grid.finitElements[i].nodes[k].globalNumber;
+
+			for (int j = k + 1; j < 3; j++) {
+
+				int endI = grid.finitElements[i].nodes[j].globalNumber;
+
+				if (begI < endI) {
+
+					temp = crsMatrix.ig[endI];
+					while (crsMatrix.jg[temp++] - begI);
+					temp--;
+					crsMatrix.ggl[temp] += denseMatrix.A[k][j];
+					crsMatrix.ggu[temp] += denseMatrix.A[j][k];
+
+				}
+
+				else {
+
+					temp = crsMatrix.ig[begI];
+					while (crsMatrix.jg[temp++] - endI);
+					temp--;
+					crsMatrix.ggl[temp] += denseMatrix.A[k][j];
+					crsMatrix.ggu[temp] += denseMatrix.A[j][k];
+
+				}
+
+			}
+
+			crsMatrix.di[begI] += denseMatrix.A[k][k];
+
+		}
+
+		for (int k = 0; k < 3; k++) {
+
+			crsMatrix.F[grid.finitElements[i].nodes[k].globalNumber] += denseMatrix.b[k];
+
+		}
+	}
+
+}
