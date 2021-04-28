@@ -626,6 +626,9 @@ void Portrait(GlobalMatrix &M, vector<elem> &elems)
 void CalcLU(GlobalMatrix& matrix) {
 	double sumU, sumL, sumD;
 	int n = n_knots;
+	matrix.l = matrix.ggl;
+	matrix.u = matrix.ggu;
+	matrix.d = matrix.di;
 
 
 	for (int i = 0; i < n; i++) {
@@ -887,7 +890,7 @@ int main()
 	for (int i = 0; i < n_knots; i++)
 		A_1[i].resize(n_knots);
 
-	CreateGlobalSystem(A_1, b, arrayLocals, arrayLocalsB, elems);
+	//CreateGlobalSystem(A_1, b, arrayLocals, arrayLocalsB, elems);
 
 	for (int i = 0; i < n_elem; i++)
 	{
@@ -895,7 +898,7 @@ int main()
 	}
 
 	AccountConditions(A, A.F, conds, knots);
-	AccountConditions_1(A_1, b, conds, knots);
+	//AccountConditions_1(A_1, b, conds, knots);
 	vector<double> x(n_knots);
 	LOS_LU(A);
 	//LOC(A_1, b, x);
@@ -904,7 +907,7 @@ int main()
 	k.x = 1;
 	k.y = 0.25;
 
-	rndPoint(k, elems[0], x);
+	rndPoint(k, elems[0], A.x);
 
 	for (int i = 0; i < n_knots; i++)
 		cout << FirstCondition(2, knots[i]) << "\t" << x[i] << "\t" <<
