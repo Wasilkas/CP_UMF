@@ -1,11 +1,14 @@
 #include <stdio.h>
 #include <iostream>
 #include <vector>
+#include <string>
 #include <iomanip>
+#include <fstream>
 
 using namespace std;
 
-int n_knots = 0, n_elem = 0, n_cond = 0;
+int n_nodes = 0, n_elem = 0, n_cond = 0, n_layer = 0, funcNum = 2;
+double chi = 0., sigma = 0.;
 
 struct GlobalMatrix
 {
@@ -14,10 +17,9 @@ struct GlobalMatrix
 	vector<double> r, p, z;
 	vector<double> x, temp, temp0, F;
 	vector<int> ig, jg;
-
 };
 
-struct knot
+struct node
 {
 	double x;
 	double y;
@@ -25,16 +27,9 @@ struct knot
 
 struct elem
 {
-	vector<knot> knts;
+	vector<node> knts;
 	vector<int> global_num;
 	int lambda, func;
-	double gamma;
-};
-
-struct localMatrix
-{
-	int elemNum;
-	vector<vector<double>> localM;
 };
 
 struct condition
@@ -44,7 +39,13 @@ struct condition
 	int num;
 };
 
-double Lambda(int num, knot& k)
+struct timeMesh
+{
+	double t0;
+	double tn;
+};
+
+double Lambda(int num, node& k)
 {
 	switch (num)
 	{
@@ -58,16 +59,22 @@ double Lambda(int num, knot& k)
 	return 1;
 }
 
-double Func(int num, knot& k, elem &e)
+double Func(int num, node& k, elem &e, double time)
 {
 	switch (num)
 	{
+	// u(x, t) = x^2*t^3
 	case(1):
-		return k.x * k.x - 2;
+		return 6 * k.x * k.x * time + 3 * k.x * k.x * time * time - 2 * time * time * time;
+
+	// u(x, t) = x^2*t^4 гипербола
 	case(2):
-		return k.x * k.x * k.x - 6 * k.x;
+		return 12 * k.x * k.x * time * time + 4 * k.x * k.x * time * time * time - 2 * time * time * time * time;
+
+	// u(x, t) = x^2*t^4 парабола
 	case 3:
-		return k.x * k.x * k.x * k.x - 12 * k.x * k.x;
+		return 4 * k.x * k.x * time * time * time - 2 * time * time * time * time;
+
 	case 4:
 		return sin(k.x * k.y) * (k.x * k.x + k.y * k.y + 1) + k.x * k.x * k.y - 2 * k.y;
 	case 5:
@@ -79,19 +86,24 @@ double Func(int num, knot& k, elem &e)
 	default:
 		break;
 	}
-	
 }
 
-double FirstCondition(int num, knot& k)
+double FirstCondition(int num, node& k, double time)
 {
 	switch (num)
 	{
+	// u(x, t) = x^2*t^3
 	case 1:
-		return k.x * k.x;
+		return k.x * k.x * time * time * time;
+
+	// u(x, t) = x^2*t^4 гипербола
 	case 2:
-		return k.x * k.x * k.x;
+		return k.x * k.x * time * time * time * time;
+
+	// u(x, t) = x^2*t^4 парабола
 	case 3:
-		return k.x * k.x * k.x * k.x;
+		return k.x * k.x * time * time * time * time;;
+
 	case 4:
 		return k.x * k.x * k.y + sin(k.x * k.y);
 	case 5:
@@ -105,12 +117,12 @@ double FirstCondition(int num, knot& k)
 	}
 }
 
-bool Input(vector<knot>& knots, vector<elem> &elems, vector<condition> &conds)
+bool Input(vector<node>& nodes, vector<elem> &elems, vector<condition> &conds, timeMesh &tm)
 {
 	FILE* info;
 	if (!fopen_s(&info, "info.txt", "r"))
 	{
-		fscanf_s(info, "%d %d", &n_knots, &n_elem);
+		fscanf_s(info, "%d %d %lf %lf", &n_nodes, &n_elem, &sigma, &chi);
 	}
 	else
 	{
@@ -119,15 +131,15 @@ bool Input(vector<knot>& knots, vector<elem> &elems, vector<condition> &conds)
 	}
 	fclose(info);
 
-	knots.resize(n_knots);
+	nodes.resize(n_nodes);
 	elems.resize(n_elem);
 
 	FILE* xy;
 	if (!fopen_s(&xy, "xy.txt", "r"))
 	{
-		for (int i = 0; i < n_knots; i++)
+		for (int i = 0; i < n_nodes; i++)
 		{
-			fscanf_s(xy, "%lf %lf", &(knots[i].x), &(knots[i].y));
+			fscanf_s(xy, "%lf %lf", &(nodes[i].x), &(nodes[i].y));
 		}
 	}
 	else
@@ -149,7 +161,7 @@ bool Input(vector<knot>& knots, vector<elem> &elems, vector<condition> &conds)
 			for (int j = 0; j < 6; j++)
 			{
 				elems[i].global_num[j]--;
-				elems[i].knts[j] = knots[elems[i].global_num[j]];
+				elems[i].knts[j] = nodes[elems[i].global_num[j]];
 			}
 		}
 	}
@@ -165,7 +177,7 @@ bool Input(vector<knot>& knots, vector<elem> &elems, vector<condition> &conds)
 	{
 		for (int i = 0; i < n_elem; i++)
 		{
-			fscanf_s(mat, "%d %d %lf", &(elems[i].lambda), &(elems[i].func), &(elems[i].gamma));
+			fscanf_s(mat, "%d %d", &(elems[i].lambda), &(elems[i].func));
 		}
 	}
 	else
@@ -191,6 +203,18 @@ bool Input(vector<knot>& knots, vector<elem> &elems, vector<condition> &conds)
 		return false;
 	}
 	fclose(s);
+
+	FILE* tMesh;
+	if (!fopen_s(&tMesh, "timeMesh.txt", "r"))
+	{
+		fscanf_s(tMesh, "%lf %lf %d", &(tm.t0), &(tm.tn), &n_layer);
+	}
+	else
+	{
+		cout << "timeMesh.txt is invalid";
+		return false;
+	}
+	fclose(tMesh);
 
 	return true;
 }
@@ -247,7 +271,25 @@ void addElemToGlobal(GlobalMatrix& M, int& i, int& j, double& value)
 	}
 }
 
-void addLocalToGlobal(GlobalMatrix& M, elem& el, vector<vector<double>>& localM, vector<double> &localB)
+//void CreateGlobalSystem(vector<vector<double>>& A, vector<double>& b, vector<localMatrix>& arrA, vector<vector<double>>& arrB, vector<elem>& elems)
+//{
+//	for (int k = 0; k < n_elem; k++)
+//	{
+//		for (int i = 0; i < 6; i++)
+//		{
+//			int indexB = elems[k].global_num[i];
+//			int indexI = elems[arrA[k].elemNum].global_num[i];
+//			for (int j = 0; j < 6; j++)
+//			{
+//				int indexJ = elems[arrA[k].elemNum].global_num[j];
+//				A[indexI][indexJ] += arrA[k].localM[i][j];
+//			}
+//			b[indexB] += arrB[k][i];
+//		}
+//	}
+//}
+
+void addLocalToGlobal(GlobalMatrix& M, elem& el, vector<vector<double>>& localM)
 {
 	for (int i = 0; i < 6; i++)
 	{
@@ -256,14 +298,17 @@ void addLocalToGlobal(GlobalMatrix& M, elem& el, vector<vector<double>>& localM,
 			addElemToGlobal(M, el.global_num[i], el.global_num[j], localM[i][j]);
 		}
 	}
+}
 
+void addLocalBToGlobal(GlobalMatrix& M, elem& el, vector<double>& localB)
+{
 	for (int i = 0; i < 6; i++)
 	{
-		M.F[el.global_num[i]] = localB[i];
+		M.F[el.global_num[i]] += localB[i];
 	}
 }
 
-void CreateArrayOfLocals(vector<localMatrix> &arrayLocals, vector<elem> &elems)
+void CalcLocal(GlobalMatrix &m, GlobalMatrix& g, elem &el)
 {
 	vector<vector<double>> M(6), G(6), alphas(3);
 	double detD = 0, buff = 0., l1 = 0., l2 = 0., l3 = 0.;
@@ -278,177 +323,153 @@ void CreateArrayOfLocals(vector<localMatrix> &arrayLocals, vector<elem> &elems)
 		alphas[i].resize(2);
 	}
 
-	for (int i = 0; i < n_elem; i++)
+	detD = DetD(el);
+	CreateAlphas(alphas, el, detD);
+
+	detD = abs(detD);
+	buff = 1;
+	M[0][0] = (1. / 60) * buff;
+	M[1][1] = (1. / 60) * buff;
+	M[2][2] = (1. / 60) * buff;
+	M[3][3] = (4. / 45) * buff;
+	M[4][4] = (4. / 45) * buff;
+	M[5][5] = (4. / 45) * buff;
+	M[0][1] = M[1][0] = (-1. / 360) * buff;
+	M[0][2] = M[2][0] = (-1. / 360) * buff;
+	M[1][2] = M[2][1] = (-1. / 360) * buff;
+	M[3][4] = M[4][3] = (2. / 45) * buff;
+	M[3][5] = M[5][3] = (2. / 45) * buff;
+	M[4][5] = M[5][4] = (2. / 45) * buff;
+	M[2][3] = M[3][2] = M[0][4] = M[4][0] = M[1][5] = M[5][1] = (-1. / 90) * buff;
+
+	l1 = Lambda(el.lambda, el.knts[0]);
+	l2 = Lambda(el.lambda, el.knts[1]);
+	l3 = Lambda(el.lambda, el.knts[2]);
+
+	G[0][0] = (alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (3 * l1 + l2 + l3) / 10;
+	G[1][1] = (alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (l1 + 3 * l2 + l3) / 10;
+	G[2][2] = (alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (l1 + l2 + 3 * l3) / 10;
+
+	G[3][3] = (4. / 15) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (l1 + 3 * l2 + l3) +
+		(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (2 * l1 + 2 * l2 + l3) +
+		(alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (3 * l1 + l2 + l3));
+
+	G[4][4] = (4. / 15) * ((alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (l1 + l2 + 3 * l3) +
+		(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + 2 * l2 + 2 * l3) +
+		(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (l1 + 3 * l2 + l3));
+
+	G[5][5] = (4. / 15) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (l1 + l2 + 3 * l3) +
+		(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (2 * l1 + l2 + 2 * l3) +
+		(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (3 * l1 + l2 + l3));
+
+	G[0][1] = G[1][0] = -(1. / 30) * (alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (2 * l1 + 2 * l2 + l3);
+	G[0][2] = G[2][0] = -(1. / 30) * (alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (2 * l1 + l2 + 2 * l3);
+	G[1][2] = G[2][1] = -(1. / 30) * (alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + 2 * l2 + 2 * l3);
+
+	G[3][4] = G[4][3] = (4. / 15) * ((alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (l1 / 2 + l2 + l3) +
+		(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (l1 + 3 * l2 + l3) +
+		(alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (l1 + l2 / 2 + l3) +
+		(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + l2 + l3 / 2));
+
+	G[3][5] = G[5][3] = (4. / 15) * ((alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (l1 + l2 + l3 / 2) +
+		(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (l1 + l2 / 2 + l3) +
+		(alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (l1 / 2 + l2 + l3) +
+		(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (3 * l1 + l2 + l3));
+
+	G[4][5] = G[5][4] = (4. / 15) * ((alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (l1 / 2 + l2 + l3) +
+		(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + l2 / 2 + l3) +
+		(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (l1 + l2 + l3 / 2) +
+		(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (l1 + l2 + 3 * l3));
+
+	G[0][3] = G[3][0] = (1. / 30) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (3 * l1 - 2 * l2 - l3) +
+		(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (14 * l1 + 3 * l2 + 3 * l3));
+
+	G[1][3] = G[3][1] = (1. / 30) * ((alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (-2 * l1 + 3 * l2 - l3) +
+		(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (3 * l1 + 14 * l2 + 3 * l3));
+
+	G[2][3] = G[3][2] = (1. / 30) * ((alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (-2 * l1 - l2 + 3 * l3) +
+		(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (-1 * l1 - 2 * l2 + 3 * l3));
+
+	G[0][4] = G[4][0] = (1. / 30) * ((alphas[1][0] * alphas[0][0] + alphas[0][1] * alphas[1][1]) * (3 * l1 - l2 - 2 * l3) +
+		(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (3 * l1 - 2 * l2 - l3));
+
+	G[1][4] = G[4][1] = (1. / 30) * ((alphas[1][0] * alphas[0][0] + alphas[1][1] * alphas[0][1]) * (-1 * l1 + 3 * l2 - 2 * l3) +
+		(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (3 * l1 + 14 * l2 + 3 * l3));
+
+	G[2][4] = G[4][2] = (1. / 30) * ((alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (3 * l1 + 3 * l2 + 14 * l3) +
+		(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (-1 * l1 - 2 * l2 + 3 * l3));
+
+	G[0][5] = G[5][0] = (1. / 30) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (3 * l1 - l2 - 2 * l3) +
+		(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (14 * l1 + 3 * l2 + 3 * l3));
+
+	G[1][5] = G[5][1] = (1. / 30) * ((alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (-1 * l1 + 3 * l2 - 2 * l3) +
+		(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (-2 * l1 + 3 * l2 - l3));
+
+	G[2][5] = G[5][2] = (1. / 30) * ((alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (3 * l1 + 3 * l2 + 14 * l3) +
+		(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (-2 * l1 - l2 + 3 * l3));
+
+	for (int k = 0; k < 6; k++)
 	{
-		arrayLocals[i].elemNum = i;
-		arrayLocals[i].localM.resize(6);
-		for (int j = 0; j < 6; j++)
+		for (int z = 0; z < 6; z++)
 		{
-			arrayLocals[i].localM[j].resize(6);
-		}
-
-		detD = DetD(elems[i]);
-		CreateAlphas(alphas, elems[i], detD);
-
-		detD = abs(detD);
-		buff = elems[i].gamma;
-		M[0][0] = (1. / 60) * buff;
-		M[1][1] = (1. / 60) * buff;
-		M[2][2] = (1. / 60) * buff;
-		M[3][3] = (4. / 45) * buff;
-		M[4][4] = (4. / 45) * buff;
-		M[5][5] = (4. / 45) * buff;
-		M[0][1] = M[1][0] = (-1. / 360) * buff;
-		M[0][2] = M[2][0] = (-1. / 360) * buff;
-		M[1][2] = M[2][1] = (-1. / 360) * buff;
-		M[3][4] = M[4][3] = (2. / 45) * buff;
-		M[3][5] = M[5][3] = (2. / 45) * buff;
-		M[4][5] = M[5][4] = (2. / 45) * buff;
-		M[2][3] = M[3][2] = M[0][4] = M[4][0] = M[1][5] = M[5][1] = (-1. / 90) * buff;
-
-		l1 = Lambda(elems[i].lambda, elems[i].knts[0]);
-		l2 = Lambda(elems[i].lambda, elems[i].knts[1]);
-		l3 = Lambda(elems[i].lambda, elems[i].knts[2]);
-
-		G[0][0] = (alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (3 * l1 + l2 + l3) / 10;
-		G[1][1] = (alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (l1 + 3 * l2 + l3) / 10;
-		G[2][2] = (alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (l1 + l2 + 3 * l3) / 10;
-
-		G[3][3] = (4. / 15) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (l1 + 3 * l2 + l3) +
-			(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (2 * l1 + 2 * l2 + l3) +
-			(alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (3 * l1 + l2 + l3));
-
-		G[4][4] = (4. / 15) * ((alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (l1 + l2 + 3 * l3) +
-			(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + 2 * l2 + 2 * l3) +
-			(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (l1 + 3 * l2 + l3));
-
-		G[5][5] = (4. / 15) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (l1 + l2 + 3 * l3) +
-			(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (2 * l1 + l2 + 2 * l3) +
-			(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (3 * l1 + l2 + l3));
-
-		G[0][1] = G[1][0] = -(1. / 30) * (alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (2 * l1 + 2 * l2 + l3);
-		G[0][2] = G[2][0] = -(1. / 30) * (alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (2 * l1 + l2 + 2 * l3);
-		G[1][2] = G[2][1] = -(1. / 30) * (alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + 2 * l2 + 2 * l3);
-
-		G[3][4] = G[4][3] = (4. / 15) * ((alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (l1 / 2 + l2 + l3) +
-			(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (l1 + 3 * l2 + l3) +
-			(alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (l1 + l2 / 2 + l3) +
-			(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + l2 + l3 / 2));
-
-		G[3][5] = G[5][3] = (4. / 15) * ((alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (l1 + l2 + l3 / 2) +
-			(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (l1 + l2 / 2 + l3) +
-			(alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (l1 / 2 + l2 + l3) +
-			(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (3 * l1 + l2 + l3));
-
-		G[4][5] = G[5][4] = (4. / 15) * ((alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (l1 / 2 + l2 + l3) +
-			(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (l1 + l2 / 2 + l3) +
-			(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (l1 + l2 + l3 / 2) +
-			(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (l1 + l2 + 3 * l3));
-
-		G[0][3] = G[3][0] = (1. / 30) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (3 * l1 - 2 * l2 - l3) +
-			(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (14 * l1 + 3 * l2 + 3 * l3));
-
-		G[1][3] = G[3][1] = (1. / 30) * ((alphas[1][0] * alphas[1][0] + alphas[1][1] * alphas[1][1]) * (-2 * l1 + 3 * l2 - l3) +
-			(alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (3 * l1 + 14 * l2 + 3 * l3));
-
-		G[2][3] = G[3][2] = (1. / 30) * ((alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (-2 * l1 - l2 + 3 * l3) +
-			(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (-1 * l1 - 2 * l2 + 3 * l3));
-
-		G[0][4] = G[4][0] = (1. / 30) * ((alphas[1][0] * alphas[0][0] + alphas[0][1] * alphas[1][1]) * (3 * l1 - l2 - 2 * l3) +
-			(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (3 * l1 - 2 * l2 - l3));
-
-		G[1][4] = G[4][1] = (1. / 30) * ((alphas[1][0] * alphas[0][0] + alphas[1][1] * alphas[0][1]) * (-1 * l1 + 3 * l2 - 2 * l3) +
-			(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (3 * l1 + 14 * l2 + 3 * l3));
-
-		G[2][4] = G[4][2] = (1. / 30) * ((alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (3 * l1 + 3 * l2 + 14 * l3) +
-			(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (-1 * l1 - 2 * l2 + 3 * l3));
-
-		G[0][5] = G[5][0] = (1. / 30) * ((alphas[0][0] * alphas[0][0] + alphas[0][1] * alphas[0][1]) * (3 * l1 - l2 - 2 * l3) +
-			(alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (14 * l1 + 3 * l2 + 3 * l3));
-
-		G[1][5] = G[5][1] = (1. / 30) * ((alphas[0][0] * alphas[1][0] + alphas[0][1] * alphas[1][1]) * (-1 * l1 + 3 * l2 - 2 * l3) +
-			(alphas[1][0] * alphas[2][0] + alphas[1][1] * alphas[2][1]) * (-2 * l1 + 3 * l2 - l3));
-
-		G[2][5] = G[5][2] = (1. / 30) * ((alphas[0][0] * alphas[2][0] + alphas[0][1] * alphas[2][1]) * (3 * l1 + 3 * l2 + 14 * l3) +
-			(alphas[2][0] * alphas[2][0] + alphas[2][1] * alphas[2][1]) * (-2 * l1 - l2 + 3 * l3));
-
-		for (int k = 0; k < 6; k++)
-		{
-			for (int z = 0; z < 6; z++)
-			{
-				arrayLocals[i].localM[k][z] = detD * (M[k][z] + G[k][z]);
-			}
+			M[k][z] = detD * M[k][z];
+			G[k][z] = detD * G[k][z];
 		}
 	}
+
+	addLocalToGlobal(m, el, M);
+	addLocalToGlobal(g, el, G);
 }
 
-void CreateArrayOfLocalB(vector<vector<double>> &arr, vector<elem> &elems)
+void CalcLocalB(GlobalMatrix &A, elem &el, double time)
 {
 	double buff = 0., f1 = 0., f2 = 0., f3 = 0., f4 = 0., f5 = 0., f6 = 0.;
-	for (int i = 0; i < n_elem; i++)
-	{
-		arr[i].resize(6);
-		double detD = abs(DetD(elems[i]));
-		buff = detD / 360;
+	vector<double> arr(6);
 
-		f1 = Func(elems[i].func, elems[i].knts[0], elems[i]);
-		f2 = Func(elems[i].func, elems[i].knts[1], elems[i]);
-		f3 = Func(elems[i].func, elems[i].knts[2], elems[i]);
-		f4 = Func(elems[i].func, elems[i].knts[3], elems[i]);
-		f5 = Func(elems[i].func, elems[i].knts[4], elems[i]);
-		f6 = Func(elems[i].func, elems[i].knts[5], elems[i]);
+	double detD = abs(DetD(el));
+	buff = detD / 360;
 
-		arr[i][0] = buff * (6 * f1 - f2 - f3 - 4 * f5);
-		arr[i][1] = buff * (-f1 + f2 * 6 - f3 - 4 * f6);
-		arr[i][2] = buff * (-f1 - f2 + 6 * f3 - 4 * f4);
+	f1 = Func(el.func, el.knts[0], el, time);
+	f2 = Func(el.func, el.knts[1], el, time);
+	f3 = Func(el.func, el.knts[2], el, time);
+	f4 = Func(el.func, el.knts[3], el, time);
+	f5 = Func(el.func, el.knts[4], el, time);
+	f6 = Func(el.func, el.knts[5], el, time);
 
-		buff = detD / 45;
+	arr[0] = buff * (6 * f1 - f2 - f3 - 4 * f5);
+	arr[1] = buff * (-f1 + f2 * 6 - f3 - 4 * f6);
+	arr[2] = buff * (-f1 - f2 + 6 * f3 - 4 * f4);
 
-		arr[i][3] = buff * (-f3 / 2 + 4 * f4 + 2 * f5 + 2 * f6);
-		arr[i][4] = buff * (-f1 / 2 + 2 * f4 + 4 * f5 + 2 * f6);
-		arr[i][5] = buff * (-f2 / 2 + 2 * f4 + 2 * f5 + 4 * f6);
-	}
+	buff = detD / 45;
+
+	arr[3] = buff * (-f3 / 2 + 4 * f4 + 2 * f5 + 2 * f6);
+	arr[4] = buff * (-f1 / 2 + 2 * f4 + 4 * f5 + 2 * f6);
+	arr[5] = buff * (-f2 / 2 + 2 * f4 + 2 * f5 + 4 * f6);
+
+	addLocalBToGlobal(A, el, arr);
 }
 
-void CreateGlobalSystem(vector<vector<double>> &A, vector<double> &b, vector<localMatrix>& arrA, vector<vector<double>>& arrB, vector<elem>& elems)
-{
-	for (int k = 0; k < n_elem; k++)
-	{
-		for (int i = 0; i < 6; i++)
-		{
-			int indexB = elems[k].global_num[i];
-			int indexI = elems[arrA[k].elemNum].global_num[i];
-			for (int j = 0; j < 6; j++)
-			{
-				int indexJ = elems[arrA[k].elemNum].global_num[j];
-				A[indexI][indexJ] += arrA[k].localM[i][j];
-			}
-			b[indexB] += arrB[k][i];
-		}
-	}
-}
+//void AccountConditions_1(vector<vector<double>> &A, vector<double> &b, vector<condition> &conds, vector<node> &nodes)
+//{
+//	for (int i = 0; i < n_cond; i++)
+//	{
+//		int index = conds[i].vertex - 1;
+//		for (int j = 0; j < n_nodes; j++)
+//		{
+//			A[index][j] = (index == j ? 1 : 0);
+//		}
+//		b[index] = FirstCondition(conds[i].num, nodes[index]);
+//	}
+//}
 
-void AccountConditions_1(vector<vector<double>> &A, vector<double> &b, vector<condition> &conds, vector<knot> &knots)
-{
-	for (int i = 0; i < n_cond; i++)
-	{
-		int index = conds[i].vertex - 1;
-		for (int j = 0; j < n_knots; j++)
-		{
-			A[index][j] = (index == j ? 1 : 0);
-		}
-		b[index] = FirstCondition(conds[i].num, knots[index]);
-	}
-}
-
-void AccountConditions(GlobalMatrix& A, vector<double>& b, vector<condition>& conds, vector<knot>& knots)
+void AccountConditions(GlobalMatrix& A, vector<double>& b, vector<condition>& conds, vector<node>& nodes, double &time)
 {
 	int ibeg, iend, jind;
 	for (int i = 0; i < n_cond; i++)
 	{
 		int index = conds[i].vertex - 1;
 		A.di[index] = 1;
-		b[index] = FirstCondition(conds[i].num, knots[index]);
+		b[index] = FirstCondition(conds[i].num, nodes[index], time);
 
 		ibeg = A.ig[index];
 		iend = A.ig[index + 1];
@@ -458,7 +479,7 @@ void AccountConditions(GlobalMatrix& A, vector<double>& b, vector<condition>& co
 		}
 		// Обнуляем внедиагональные элементы i-ой строки в ggu
 		jind = index;
-		for (int j = 0; j < A.ig[n_knots]; j++)
+		for (int j = 0; j < A.ig[n_nodes]; j++)
 		{
 			if (A.jg[j] == jind)
 			{
@@ -468,69 +489,69 @@ void AccountConditions(GlobalMatrix& A, vector<double>& b, vector<condition>& co
 	}
 }
 
-double ScalarMult(vector<double> &vec1, vector<double>& vec2)
-{
-	double res = 0.;
-	for (int i = 0; i < n_knots; i++)
-	{
-		res += vec1[i] * vec2[i];
-	}
-	return res;
-}
-
-void MatrixVectorMult(vector<vector<double>>& A, vector<double> &vec, vector<double> &res)
-{
-	for (int i = 0; i < n_knots; i++)
-	{
-		res[i] = ScalarMult(A[i], vec);
-	}
-}
-
-void LOC(vector<vector<double>> &A, vector<double> &b, vector<double> &x)
-{
-	double residual = 0., residual1 = 0., alpha = 0., beta = 0., scMult = 0., eps = 1e-15;
-	vector<double> r(n_knots), z(n_knots), p(n_knots);
-
-	for (int i = 0; i < n_knots; i++)
-	{
-		b[i] -= ScalarMult(A[i], x);
-	}
-	r = z = b;
-	MatrixVectorMult(A, z, p);
-	residual = ScalarMult(r, r);
-
-	for (int i = 1; i < 100000 && residual > eps && residual != residual1; i++)
-	{
-		residual1 = residual;
-		scMult = ScalarMult(p, p);
-		alpha = ScalarMult(p, r) / scMult;
-
-		for (int j = 0; j < n_knots; j++)
-		{
-			x[j] += alpha * z[j];
-			r[j] -= alpha * p[j];
-		}
-
-		MatrixVectorMult(A, r, b);
-
-		beta = -ScalarMult(p, b) / scMult;
-
-		for (int j = 0; j < n_knots; j++)
-		{
-			z[j] = r[j] + beta * z[j];
-			p[j] = b[j] + beta * p[j];
-		}
-
-		residual -= alpha * alpha * scMult;
-	}
-}
+//double ScalarMult(vector<double> &vec1, vector<double>& vec2)
+//{
+//	double res = 0.;
+//	for (int i = 0; i < n_nodes; i++)
+//	{
+//		res += vec1[i] * vec2[i];
+//	}
+//	return res;
+//}
+//
+//void MatrixVectorMult(vector<vector<double>>& A, vector<double> &vec, vector<double> &res)
+//{
+//	for (int i = 0; i < n_nodes; i++)
+//	{
+//		res[i] = ScalarMult(A[i], vec);
+//	}
+//}
+//
+//void LOC(vector<vector<double>> &A, vector<double> &b, vector<double> &x)
+//{
+//	double residual = 0., residual1 = 0., alpha = 0., beta = 0., scMult = 0., eps = 1e-15;
+//	vector<double> r(n_nodes), z(n_nodes), p(n_nodes);
+//
+//	for (int i = 0; i < n_nodes; i++)
+//	{
+//		b[i] -= ScalarMult(A[i], x);
+//	}
+//	r = z = b;
+//	MatrixVectorMult(A, z, p);
+//	residual = ScalarMult(r, r);
+//
+//	for (int i = 1; i < 100000 && residual > eps && residual != residual1; i++)
+//	{
+//		residual1 = residual;
+//		scMult = ScalarMult(p, p);
+//		alpha = ScalarMult(p, r) / scMult;
+//
+//		for (int j = 0; j < n_nodes; j++)
+//		{
+//			x[j] += alpha * z[j];
+//			r[j] -= alpha * p[j];
+//		}
+//
+//		MatrixVectorMult(A, r, b);
+//
+//		beta = -ScalarMult(p, b) / scMult;
+//
+//		for (int j = 0; j < n_nodes; j++)
+//		{
+//			z[j] = r[j] + beta * z[j];
+//			p[j] = b[j] + beta * p[j];
+//		}
+//
+//		residual -= alpha * alpha * scMult;
+//	}
+//}
 
 // Процедура построения портрета матрицы
 void Portrait(GlobalMatrix &M, vector<elem> &elems)
 {
-	vector<int> listbeg(n_knots);
-	vector<int> list1(8 * n_knots);
-	vector<int> list2(8 * n_knots);
+	vector<int> listbeg(n_nodes);
+	vector<int> list1(8 * n_nodes);
+	vector<int> list2(8 * n_nodes);
 	
 	int ielem, i, k, j;
 	int ind1, ind2, iaddr;
@@ -587,25 +608,25 @@ void Portrait(GlobalMatrix &M, vector<elem> &elems)
 		}
 	}
 
-	M.ig.resize(n_knots + 1);
-	M.di.resize(n_knots);
+	M.ig.resize(n_nodes + 1);
+	M.di.resize(n_nodes);
 	M.ggl.resize(list1.size());
 	M.ggu.resize(list1.size());
 	M.u.resize(list1.size());
 	M.l.resize(list1.size());
-	M.d.resize(n_knots);
+	M.d.resize(n_nodes);
 	M.jg.resize(list1.size());
-	M.x.resize(n_knots);
-	M.temp.resize(n_knots);
-	M.temp0.resize(n_knots);
-	M.F.resize(n_knots);
-	M.r.resize(n_knots);
-	M.p.resize(n_knots);
-	M.z.resize(n_knots);
+	M.x.resize(n_nodes);
+	M.temp.resize(n_nodes);
+	M.temp0.resize(n_nodes);
+	M.F.resize(n_nodes);
+	M.r.resize(n_nodes);
+	M.p.resize(n_nodes);
+	M.z.resize(n_nodes);
 
 	M.ig[0] = 0;
 
-	for (i = 0; i < n_knots; i++)
+	for (i = 0; i < n_nodes; i++)
 	{
 		M.ig[i + 1] = M.ig[i];
 		iaddr = listbeg[i];
@@ -616,223 +637,86 @@ void Portrait(GlobalMatrix &M, vector<elem> &elems)
 			iaddr = list2[iaddr];
 		}
 	}
-	for (i = 3; i < n_knots + 1; i++)
+	for (i = 3; i < n_nodes + 1; i++)
 	{
 		M.ig[i]++;
 	}
 }
 
-// LU Факторизация
-void CalcLU(GlobalMatrix& matrix) {
-	double sumU, sumL, sumD;
-	int n = n_knots;
-	matrix.l = matrix.ggl;
-	matrix.u = matrix.ggu;
-	matrix.d = matrix.di;
-
-
-	for (int i = 0; i < n; i++) {
-
-		sumD = 0;
-
-		int begI = matrix.ig[i];
-		int endI = matrix.ig[i + 1];
-		for (int igi = begI; igi < endI; igi++) {
-
-			sumU = 0;
-			sumL = 0;
-
-			int Jindex = matrix.jg[igi];
-
-			for (int igj = begI; igj < igi; igj++) {
-
-				int begJ = matrix.ig[Jindex];
-				int endJ = matrix.ig[Jindex + 1];
-
-				for (int jgi = begJ; jgi < endJ; jgi++) {
-
-					if (matrix.jg[igj] == matrix.jg[jgi]) {
-
-						sumL += matrix.l[igj] * matrix.u[jgi];
-
-						sumU += matrix.l[jgi] * matrix.u[igj];
-
-					}
-
-				}
-			}
-			matrix.l[igi] -= sumL;
-			matrix.u[igi] -= sumU;
-			matrix.u[igi] /= matrix.d[Jindex];
-			sumD += matrix.l[igi] * matrix.u[igi];
-		}
-
-		matrix.d[i] -= sumD;
-	}
-}
-
-// Прямой ход Ly = F
-void CalcDir(GlobalMatrix& matrix, vector<double>& y, vector<double>& F) {
-	double sum, buf;
-	int n = n_knots;
-
-
-	for (int i = 0; i < n; i++) {
-		y[i] = F[i];
-	}
-
-	for (int i = 0; i < n; i++) {
-
-		sum = 0;
-
-		int begI = matrix.ig[i];
-		int endI = matrix.ig[i + 1];
-
-		for (int igi = begI; igi < endI; igi++) {
-
-			sum += y[matrix.jg[igi]] * matrix.l[igi];
-
-		}
-
-		buf = y[i] - sum;
-
-		y[i] = buf / matrix.d[i];
-
-	}
-
-}
-
-// Обратный ход Ux = y
-void CalcRev(GlobalMatrix& matrix, vector<double>& x, vector<double>& y) {
-	int n = n_knots;
-
-	for (int i = 0; i < n; i++) {
-		x[i] = y[i];
-	}
-
-	for (int i = n_knots - 1; i >= 0; i--) {
-
-		int begI = matrix.ig[i];
-		int endI = matrix.ig[i + 1];
-
-		for (int igi = begI; igi < endI; igi++) {
-
-			x[matrix.jg[igi]] -= x[i] * matrix.u[igi];
-
-		}
-
-	}
-
-}
-
-// Умножение матрицы на вектор Ax = res
-void MultMV(GlobalMatrix& matrix, vector<double>& x, vector<double>& res) {
-	int n = n_knots;
-
-	for (int i = 0; i < n; i++) {
-
-		res[i] = matrix.di[i] * x[i];
-
-		int begI = matrix.ig[i];
-		int endI = matrix.ig[i + 1];
-
-		for (int igi = begI; igi < endI; igi++) {
-
-			int Jindex = matrix.jg[igi];
-
-			res[i] += matrix.ggl[igi] * x[Jindex];
-			res[Jindex] += matrix.ggu[igi] * x[i];
-
+void multyMatrixVector(GlobalMatrix &m, vector<double> &x, vector<double> &res)
+{
+	for (int i = 0; i < n_nodes; ++i) {
+		int gi = m.ig[i], gi_1 = m.ig[i + 1];
+		res[i] = m.di[i] * x[i];
+		for (int j = gi; j < gi_1; ++j) {
+			int column = m.jg[j];
+			res[i] += m.ggl[j] * x[column];
+			res[column] += m.ggu[j] * x[i];
 		}
 	}
 }
 
-// Скалярное произведение двух векторов
-double ScalarProd(vector<double>& x, vector<double>& y) {
-	int n = x.size();
-
-	double result = 0;
-
-	for (int i = 0; i < n; i++) {
-		result += x[i] * y[i];
-	}
-
-	return result;
+double scal(vector<double> &a, vector<double> &b)
+{
+	double s = 0.0;
+	for (int i = 0; i < n_nodes; i++)
+		s += a[i] * b[i];
+	return s;
 }
 
-// Локально-оптимальная схема c факторизацией LU
-void LOS_LU(GlobalMatrix& matrix) {
-
-	double alpha, beta, norm, temp_nev = 0;
-
-	int n = n_knots, maxiter = 1e9;
-	double epsilon = 1e-15;
-
-	CalcLU(matrix);
-	// A * x0
-	MultMV(matrix, matrix.x, matrix.temp);
-
-	// f - A * x0
-	for (int i = 0; i < n; i++) {
-		matrix.temp[i] = matrix.F[i] - matrix.temp[i];
-	}
-
-	// L * r0 = f - A * x0
-	CalcDir(matrix, matrix.r, matrix.temp);
-
-	// U * z0 = r0
-	CalcRev(matrix, matrix.z, matrix.r);
-
-	// A * z0
-	MultMV(matrix, matrix.z, matrix.temp);
-
-	// L * p0 = A * z0
-	CalcDir(matrix, matrix.p, matrix.temp);
-
-	norm = ScalarProd(matrix.r, matrix.r);
-
-	int k;
-
-	for (k = 0; k < maxiter && norm > epsilon && norm != temp_nev; k++) {
-
-		// если невязка не изменилась, то выходим из итерационного процесса
-		temp_nev = norm;
-
-		alpha = ScalarProd(matrix.p, matrix.r) / ScalarProd(matrix.p, matrix.p);
-
-		for (int i = 0; i < n; i++) {
-			matrix.x[i] = matrix.x[i] + alpha * matrix.z[i];
-			matrix.r[i] = matrix.r[i] - alpha * matrix.p[i];
-		}
-
-		// U * temp = r
-		CalcRev(matrix, matrix.temp, matrix.r);
-
-		// A * U-1 * r = temp0
-		MultMV(matrix, matrix.temp, matrix.temp0);
-
-		// L * temp = A * U-1 * r 
-		CalcDir(matrix, matrix.temp, matrix.temp0);
-
-		beta = -1 * ScalarProd(matrix.p, matrix.temp) / ScalarProd(matrix.p, matrix.p);
-
-		// U * temp0 = r
-		CalcRev(matrix, matrix.temp0, matrix.r);
-
-		norm = norm - alpha * alpha * ScalarProd(matrix.p, matrix.p);
-
-		for (int i = 0; i < n; i++) {
-
-			matrix.z[i] = matrix.temp0[i] + beta * matrix.z[i];
-			matrix.p[i] = matrix.temp[i] + beta * matrix.p[i];
-
-		}
-
-	}
-
+double norm(vector<double> &a)
+{
+	return sqrt(scal(a, a));
 }
 
-void rndPoint(knot &k, elem &el, vector<double> &q)
+void LOS(GlobalMatrix &m)
+{
+	int count = 0, maxiter = 100000;
+	double eps = 1e-20;
+
+	for (int i = 0; i < n_nodes; ++i)
+	{
+		m.x[i] = 1;
+	}
+
+	multyMatrixVector(m, m.x, m.temp);
+
+	for (int i = 0; i < n_nodes; ++i)
+	{
+		m.r[i] = m.F[i] - m.temp[i];
+		m.z[i] = m.r[i];
+	}
+
+	multyMatrixVector(m, m.z, m.p);
+	double sr = scal(m.r, m.r);
+
+	while (sr > eps && count <= maxiter)
+	{
+		double pp = scal(m.p, m.p);
+
+		double ak = scal(m.p, m.r) / pp;
+
+		for (int i = 0; i < n_nodes; ++i)
+		{
+			m.x[i] = m.x[i] + ak * m.z[i];
+			m.r[i] = m.r[i] - ak * m.p[i];
+		}
+
+		multyMatrixVector(m, m.r, m.temp);
+
+		double bk = -scal(m.p, m.temp) / pp;
+
+		for (int i = 0; i < n_nodes; ++i)
+		{
+			m.z[i] = m.r[i] + bk * m.z[i];
+			m.p[i] = m.temp[i] + bk * m.p[i];
+		}
+		sr = sqrt(scal(m.r, m.r));
+		++count;
+	}
+}
+
+void rndPoint(node &k, elem &el, vector<double> &q, double &time)
 {
 	vector<vector<double>> alpha(3);
 	for (int i = 0; i < 3; i++)
@@ -864,54 +748,213 @@ void rndPoint(knot &k, elem &el, vector<double> &q)
 	sum += q[el.global_num[3]] * basis[3];
 	sum += q[el.global_num[4]] * basis[4];
 	sum += q[el.global_num[5]] * basis[5];
-	double resh = FirstCondition(3, k);
+	double resh = FirstCondition(3, k, time);
 	cout << setprecision(3) << sum << "\t" << "\t" << resh << "\t" << "\t" << fabs(resh - sum) << "\n\n";
+}
+
+void calcGlobalMandG(vector<elem>& elems, GlobalMatrix &M, GlobalMatrix &G)
+{
+	for (int i = 0; i < n_elem; i++)
+	{
+		CalcLocal(M, G, elems[i]);
+	}
+}
+
+void calcB(vector<elem>& elems, GlobalMatrix& A, double &time)
+{
+	for (int i = 0; i < n_elem; i++)
+	{
+		CalcLocalB(A, elems[i], time);
+	}
+}
+
+void calcFirstThreeQs(timeMesh &tm, vector<vector<double>> &solution, vector<node> &k)
+{
+	double h = (tm.tn - tm.t0) / n_layer, currT = tm.t0;
+	for (int i = 0; i < 3; i++)
+	{
+		currT = tm.t0 + i * h;
+		for (int j = 0; j < n_nodes; j++)
+			solution[i][j] = FirstCondition(funcNum, k[j], currT);
+	}
+}
+
+void writeResults(string fname, vector<vector<double>>& solutions, vector<node> &nodes, timeMesh &tm)
+{
+	ofstream file(fname);
+	double h = (tm.tn - tm.t0) / n_layer, currT = tm.t0;
+
+	for (int i = 0; i < solutions.size(); i++)
+	{
+		currT = tm.t0 + i * h;
+		file << "q" << i << endl;
+		file << "calc\t\t\t" << "analitic\t\t" << "diff" << endl;
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			double a = FirstCondition(funcNum, nodes[j], currT);
+			file << scientific << solutions[i][j] << "\t" << a << "\t" << abs(solutions[i][j] - a) << endl;
+		}
+		file << endl << endl;
+	}
 }
 
 int main()
 {
 	GlobalMatrix M;
-	vector<knot> knots;
+	vector<node> nodes;
 	vector<elem> elems;
 	vector<condition> conds;
-	if (!Input(knots, elems, conds)) return 1;
+	timeMesh tm;
 
-	Portrait(M, elems);
-	GlobalMatrix G = M, A = M;
+	if (!Input(nodes, elems, conds, tm)) return 1;
+	double h = (tm.tn - tm.t0) / n_layer, currT = tm.t0;
 
-	vector<localMatrix> arrayLocals(n_elem);
-	CreateArrayOfLocals(arrayLocals, elems);
-
-	vector<vector<double>> arrayLocalsB(n_elem);
-	CreateArrayOfLocalB(arrayLocalsB, elems);
- 
-	vector<vector<double>> A_1(n_knots);
-	vector<double> b(n_knots);
-	for (int i = 0; i < n_knots; i++)
-		A_1[i].resize(n_knots);
-
-	//CreateGlobalSystem(A_1, b, arrayLocals, arrayLocalsB, elems);
-
-	for (int i = 0; i < n_elem; i++)
+	vector<vector<double>> solutions(n_layer + 1);
+	for (int i = 0; i <= n_layer; i++)
 	{
-		addLocalToGlobal(A, elems[i], arrayLocals[i].localM, arrayLocalsB[i]);
+		solutions[i].resize(n_nodes);
 	}
 
-	AccountConditions(A, A.F, conds, knots);
-	//AccountConditions_1(A_1, b, conds, knots);
-	vector<double> x(n_knots);
-	LOS_LU(A);
+	Portrait(M, elems);
+	GlobalMatrix G = M, A = M, T = M;
+
+	calcGlobalMandG(elems, M, G);
+	calcFirstThreeQs(tm, solutions, nodes);
+ 
+	//vector<vector<double>> A_1(n_nodes);
+	//vector<double> b(n_nodes);
+	/*for (int i = 0; i < n_nodes; i++)
+		A_1[i].resize(n_nodes);*/
+
+	//CreateGlobalSystem(A_1, b, arrayLocals, arrayLocalsB, elems);
+	double t01 = 0, t02 = 0, t03 = 0, t10 = 0, t12 = 0, t13 = 0, t20 = 0, t21 = 0,
+		t23 = 0, t30 = 0, t31 = 0, t32 = 0, t_chi_j = 0, t_sigma_j = 0, t_chi_j3 = 0,
+		t_chi_j2 = 0, t_chi_j1 = 0, t_sigma_j3 = 0, t_sigma_j2 = 0, t_sigma_j1 = 0;
+
+	vector<double> temp(n_nodes);
+
+	for (int i = 3; i <= n_layer; i++)
+	{
+		// Текущий временной слой
+		currT = tm.t0 + i * h;
+		// Изменения по t
+		t01 = currT - (currT - h);
+		t02 = currT - (currT - 2 * h);
+		t03 = currT - (currT - 3 * h);
+		t10 = (currT - h) - currT;
+		t12 = (currT - h) - (currT - 2 * h);
+		t13 = (currT - h) - (currT - 3 * h);
+		t20 = (currT - 2 * h) - currT;
+		t21 = (currT - 2 * h) - (currT - h);
+		t23 = (currT - 2 * h) - (currT - 3 * h);
+		t30 = (currT - 3 * h) - currT;
+		t31 = (currT - 3 * h) - (currT - h);
+		t32 = (currT - 3 * h) - (currT - 2 * h);
+
+		// Вектор правой части на текущем временном слое
+		A.F.assign(A.F.size(), 0);
+		calcB(elems, A, currT);
+
+		// Множители для неявной 4-х слойной схемы
+		t_chi_j = 2 * (t01 + t02 + t03) / (t01 * t02 * t03) * chi;
+		t_sigma_j = (t02 * t01 + t03 * t02 + t01 * t03) / (t03 * t02 * t01) * sigma;
+		t_chi_j3 = 2 * (t01 + t02) / (t32 * t31 * t30) * chi;
+		t_sigma_j3 = (t02 * t01) / (t32 * t31 * t30) * sigma;
+		t_chi_j2 = 2 * (t01 + t03) / (t23 * t21 * t20) * chi;
+		t_sigma_j2 = (t01 * t03) / (t23 * t21 * t20) * sigma;
+		t_chi_j1 = 2 * (t02 + t03) / (t13 * t12 * t10) * chi;
+		t_sigma_j1 = (t03 * t02) / (t13 * t12 * t10) * sigma;
+
+		// Левая часть
+		for (int j = 0; j < A.ig[n_nodes - 1]; j++)
+		{
+			A.ggl[j] = t_chi_j * M.ggl[j] + t_sigma_j * M.ggl[j] + G.ggl[j];
+			A.ggu[j] = t_chi_j * M.ggu[j] + t_sigma_j * M.ggu[j] + G.ggu[j];
+		}
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			A.di[j] = t_chi_j * M.di[j] + t_sigma_j * M.di[j] + G.di[j];
+		}
+
+		// Правая часть
+		// deltaT * M * q[j-3]
+		for (int j = 0; j < A.ig[n_nodes - 1]; j++)
+		{
+			T.ggl[j] = t_chi_j3 * M.ggl[j] + t_sigma_j3 * M.ggl[j];
+			T.ggu[j] = t_chi_j3 * M.ggu[j] + t_sigma_j3 * M.ggu[j];
+		}
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			T.di[j] = t_chi_j3 * M.di[j] + t_sigma_j3 * M.di[j];
+		}
+
+		multyMatrixVector(T, solutions[i - 3], temp);
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			A.F[j] -= temp[j];
+		}
+
+		// deltaT * M * q[j-2]
+		for (int j = 0; j < A.ig[n_nodes - 1]; j++)
+		{
+			T.ggl[j] = t_chi_j2 * M.ggl[j] + t_sigma_j2 * M.ggl[j];
+			T.ggu[j] = t_chi_j2 * M.ggu[j] + t_sigma_j2 * M.ggu[j];
+		}
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			T.di[j] = t_chi_j2 * M.di[j] + t_sigma_j2 * M.di[j];
+		}
+
+		multyMatrixVector(T, solutions[i - 2], temp);
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			A.F[j] -= temp[j];
+		}
+
+		// deltaT * M * q[j-1]
+		for (int j = 0; j < A.ig[n_nodes - 1]; j++)
+		{
+			T.ggl[j] = t_chi_j1 * M.ggl[j] + t_sigma_j1 * M.ggl[j];
+			T.ggu[j] = t_chi_j1 * M.ggu[j] + t_sigma_j1 * M.ggu[j];
+		}
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			T.di[j] = t_chi_j1 * M.di[j] + t_sigma_j1 * M.di[j];
+		}
+
+		multyMatrixVector(T, solutions[i - 1], temp);
+
+		for (int j = 0; j < n_nodes; j++)
+		{
+			A.F[j] -= temp[j];
+		}
+
+		AccountConditions(A, A.F, conds, nodes, currT);
+		LOS(A);
+		solutions[i].swap(A.x);
+	}
+
+	string fname = to_string(funcNum) + "_" + to_string(n_layer) + ".txt";
+
+	writeResults(fname, solutions, nodes, tm);
+
+	//AccountConditions_1(A_1, b, conds, nodes);
 	//LOC(A_1, b, x);
 
-	knot k;
+	/*node k;
 	k.x = 1;
-	k.y = 0.25;
+	k.y = 0.25;*/
 
-	rndPoint(k, elems[0], A.x);
+	//rndPoint(k, elems[0], A.x);
 
-	for (int i = 0; i < n_knots; i++)
-		cout << FirstCondition(2, knots[i]) << "\t" << x[i] << "\t" <<
-		abs(x[i] - FirstCondition(2, knots[i])) << endl;
+	
 	
 	return 0;
 }
